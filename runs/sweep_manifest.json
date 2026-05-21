@@ -1,0 +1,154 @@
+{
+  "batch_sizes": [
+    64,
+    128,
+    256,
+    512,
+    1024,
+    2048
+  ],
+  "momenta": [
+    0.8,
+    0.9,
+    0.95,
+    0.99
+  ],
+  "seeds": [
+    0
+  ],
+  "steps": null,
+  "epochs": 25,
+  "muon_lr": 0.02,
+  "extra": "",
+  "runs": [
+    {
+      "name": "bs64_m0p8",
+      "status": "skipped",
+      "csv": "runs/bs64_m0p8.csv"
+    },
+    {
+      "name": "bs64_m0p9",
+      "status": "skipped",
+      "csv": "runs/bs64_m0p9.csv"
+    },
+    {
+      "name": "bs64_m0p95",
+      "status": "skipped",
+      "csv": "runs/bs64_m0p95.csv"
+    },
+    {
+      "name": "bs64_m0p99",
+      "status": "skipped",
+      "csv": "runs/bs64_m0p99.csv"
+    },
+    {
+      "name": "bs128_m0p8",
+      "status": "skipped",
+      "csv": "runs/bs128_m0p8.csv"
+    },
+    {
+      "name": "bs128_m0p9",
+      "status": "skipped",
+      "csv": "runs/bs128_m0p9.csv"
+    },
+    {
+      "name": "bs128_m0p95",
+      "status": "skipped",
+      "csv": "runs/bs128_m0p95.csv"
+    },
+    {
+      "name": "bs128_m0p99",
+      "status": "skipped",
+      "csv": "runs/bs128_m0p99.csv"
+    },
+    {
+      "name": "bs256_m0p8",
+      "status": "skipped",
+      "csv": "runs/bs256_m0p8.csv"
+    },
+    {
+      "name": "bs256_m0p9",
+      "status": "skipped",
+      "csv": "runs/bs256_m0p9.csv"
+    },
+    {
+      "name": "bs256_m0p95",
+      "status": "skipped",
+      "csv": "runs/bs256_m0p95.csv"
+    },
+    {
+      "name": "bs256_m0p99",
+      "status": "skipped",
+      "csv": "runs/bs256_m0p99.csv"
+    },
+    {
+      "name": "bs512_m0p8",
+      "status": "skipped",
+      "csv": "runs/bs512_m0p8.csv"
+    },
+    {
+      "name": "bs512_m0p9",
+      "status": "skipped",
+      "csv": "runs/bs512_m0p9.csv"
+    },
+    {
+      "name": "bs512_m0p95",
+      "status": "skipped",
+      "csv": "runs/bs512_m0p95.csv"
+    },
+    {
+      "name": "bs512_m0p99",
+      "status": "skipped",
+      "csv": "runs/bs512_m0p99.csv"
+    },
+    {
+      "name": "bs1024_m0p8",
+      "status": "ok",
+      "csv": "runs/bs1024_m0p8.csv",
+      "seconds": 1228.8536667823792
+    },
+    {
+      "name": "bs1024_m0p9",
+      "status": "ok",
+      "csv": "runs/bs1024_m0p9.csv",
+      "seconds": 1226.6267304420471
+    },
+    {
+      "name": "bs1024_m0p95",
+      "status": "ok",
+      "csv": "runs/bs1024_m0p95.csv",
+      "seconds": 1226.6105403900146
+    },
+    {
+      "name": "bs1024_m0p99",
+      "status": "ok",
+      "csv": "runs/bs1024_m0p99.csv",
+      "seconds": 1226.9738552570343
+    },
+    {
+      "name": "bs2048_m0p8",
+      "status": "ok",
+      "csv": "runs/bs2048_m0p8.csv",
+      "seconds": 1243.0981538295746
+    },
+    {
+      "name": "bs2048_m0p9",
+      "status": "ok",
+      "csv": "runs/bs2048_m0p9.csv",
+      "seconds": 1242.964697599411
+    },
+    {
+      "name": "bs2048_m0p95",
+      "status": "ok",
+      "csv": "runs/bs2048_m0p95.csv",
+      "seconds": 1243.393182516098
+    },
+    {
+      "name": "bs2048_m0p99",
+      "status": "ok",
+      "csv": "runs/bs2048_m0p99.csv",
+      "seconds": 1243.6293470859528
+    }
+  ],
+  "total_seconds": 9882.15263056755
+}
