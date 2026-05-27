@@ -170,7 +170,9 @@ def main():
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    dtype = torch.bfloat16 if device.type in ("cuda", "mps") else torch.float32
+    # bfloat16 requires Ampere (A100+); V100 only supports float16/float32
+    cc = torch.cuda.get_device_capability() if device.type == "cuda" else (0, 0)
+    dtype = torch.bfloat16 if (device.type == "mps" or cc[0] >= 8) else torch.float32
     model = AutoModelForCausalLM.from_pretrained(
         args.model_id, dtype=dtype,
         trust_remote_code=True, cache_dir=args.cache_dir,
