@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import time
 from pathlib import Path
 
@@ -22,7 +23,6 @@ import torch
 import torch.nn as nn
 from datasets import load_dataset
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from muon import Muon
 
@@ -40,14 +40,12 @@ def split_params_for_muon_lm(model: nn.Module):
     """Split pretrained LLM params into (muon_params, adamw_params).
 
     Muon handles hidden 2-D weight matrices.
-    AdamW handles embeddings, lm_head, biases, and layer norms — anything
-    that is either 1-D or at the input/output boundary of the network.
+    AdamW handles embeddings, lm_head, biases, and layer norms.
     """
     muon_params, adamw_params = [], []
     for name, p in model.named_parameters():
         if not p.requires_grad:
             continue
-        # Input embedding and output head: treat like input/output, use AdamW
         if any(k in name for k in ("embed", "lm_head", "wte", "wpe")):
             adamw_params.append(p)
         elif p.ndim >= 2:
@@ -55,6 +53,22 @@ def split_params_for_muon_lm(model: nn.Module):
         else:
             adamw_params.append(p)
     return muon_params, adamw_params
+
+
+# ── LR schedule: cosine decay with linear warmup ──────────────────────────────
+
+def cosine_lr(step: int, total_steps: int, warmup_steps: int, base_lr: float) -> float:
+    if step < warmup_steps:
+        return base_lr * step / max(warmup_steps, 1)
+    progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
+    return base_lr * 0.5 * (1.0 + math.cos(math.pi * progress))
+
+
+def set_lr(optimizers, lr_scale_pairs):
+    """lr_scale_pairs: list of (optimizer, lr) to set."""
+    for opt, lr in lr_scale_pairs:
+        for pg in opt.param_groups:
+            pg["lr"] = lr
 
 
 # ── Data ──────────────────────────────────────────────────────────────────────
@@ -73,7 +87,8 @@ def _tokenize_conversation(messages, tokenizer, max_length):
             messages[:-1], tokenize=False, add_generation_prompt=True
         )
         prompt_len = len(tokenizer(prompt_text, add_special_tokens=False)["input_ids"])
-        labels[: min(prompt_len, len(labels))] = [-100] * min(prompt_len, len(labels))
+        prompt_len = min(prompt_len, len(labels) - 1)  # keep at least 1 target token
+        labels[:prompt_len] = [-100] * prompt_len
 
     return {"input_ids": input_ids, "attention_mask": enc["attention_mask"], "labels": labels}
 
@@ -137,15 +152,13 @@ def collate(pad_id):
     return _fn
 
 
-# ── Eval ──────────────────────────────────────────────────────────────────────
+# ── Eval — uses the FULL eval set ─────────────────────────────────────────────
 
 @torch.no_grad()
-def evaluate(model, loader, device, n_batches=30):
+def evaluate(model, loader, device):
     model.eval()
     total, n = 0.0, 0
-    for i, batch in enumerate(loader):
-        if i >= n_batches:
-            break
+    for batch in loader:          # no cap — use all eval examples
         batch = {k: v.to(device) for k, v in batch.items()}
         loss = model(**batch).loss
         if loss is not None:
@@ -163,6 +176,7 @@ def main():
     torch.manual_seed(args.seed)
 
     # ── Model & tokenizer ────────────────────────────────────────────────────
+    from transformers import AutoModelForCausalLM, AutoTokenizer
     print(f"loading {args.model_id} ...")
     tokenizer = AutoTokenizer.from_pretrained(
         args.model_id, trust_remote_code=True, cache_dir=args.cache_dir
@@ -170,7 +184,7 @@ def main():
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    # bfloat16 requires Ampere (A100+); V100 only supports float16/float32
+    # bfloat16 requires Ampere (A100+); V100 only supports float32
     cc = torch.cuda.get_device_capability() if device.type == "cuda" else (0, 0)
     dtype = torch.bfloat16 if (device.type == "mps" or cc[0] >= 8) else torch.float32
     model = AutoModelForCausalLM.from_pretrained(
@@ -180,7 +194,7 @@ def main():
     model.config.use_cache = False
     model = model.to(device)
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
-    print(f"  {n_params:.0f}M params on {device}")
+    print(f"  {n_params:.0f}M params on {device}  dtype={dtype}")
 
     # ── Dataset ──────────────────────────────────────────────────────────────
     print(f"loading {args.dataset} ...")
@@ -199,6 +213,8 @@ def main():
 
     # ── Optimizer ─────────────────────────────────────────────────────────────
     print(f"optimizer: {args.optimizer}")
+    warmup_steps = max(1, int(0.05 * args.steps))   # 5% warmup
+
     if args.optimizer == "muon":
         muon_p, adamw_p = split_params_for_muon_lm(model)
         print(f"  muon params:  {sum(p.numel() for p in muon_p)/1e6:.1f}M")
@@ -207,11 +223,13 @@ def main():
         opt_adamw = torch.optim.AdamW(adamw_p, lr=args.adamw_lr,
                                       betas=(0.9, 0.95), weight_decay=args.weight_decay)
         optimizers = [opt_muon, opt_adamw]
+        base_lrs   = [args.muon_lr, args.adamw_lr]
     else:
         all_p = list({id(p): p for p in model.parameters() if p.requires_grad}.values())
         opt_adamw  = torch.optim.AdamW(all_p, lr=args.adamw_lr,
                                        betas=(0.9, 0.95), weight_decay=args.weight_decay)
         optimizers = [opt_adamw]
+        base_lrs   = [args.adamw_lr]
 
     # ── CSV logging ──────────────────────────────────────────────────────────
     csv_file, csv_writer = None, None
@@ -235,6 +253,12 @@ def main():
                 break
             batch = {k: v.to(device) for k, v in batch.items()}
 
+            # cosine LR schedule with warmup
+            for opt, base_lr in zip(optimizers, base_lrs):
+                lr_now = cosine_lr(step, args.steps, warmup_steps, base_lr)
+                for pg in opt.param_groups:
+                    pg["lr"] = lr_now
+
             for opt in optimizers:
                 opt.zero_grad(set_to_none=True)
             loss = model(**batch).loss
@@ -247,7 +271,8 @@ def main():
             step += 1
 
             if step % args.log_every == 0:
-                print(f"step {step:5d} | train_loss {loss_ema:.4f} | {time.time()-t0:.1f}s")
+                lr_now = cosine_lr(step, args.steps, warmup_steps, base_lrs[0])
+                print(f"step {step:5d} | train_loss {loss_ema:.4f} | lr {lr_now:.2e} | {time.time()-t0:.1f}s")
 
             if step % args.eval_every == 0 or step == args.steps:
                 val_loss = evaluate(model, eval_loader, device)
@@ -272,17 +297,19 @@ def parse_args():
     p.add_argument("--optimizer",    choices=["muon", "adamw"], default="muon")
     p.add_argument("--model-id",     default="Qwen/Qwen3-0.6B")
     p.add_argument("--dataset",      choices=["ultrachat", "openhermes"], default="ultrachat")
-    p.add_argument("--steps",        type=int,   default=1000)
+    p.add_argument("--steps",        type=int,   default=500)
     p.add_argument("--batch-size",   type=int,   default=4)
     p.add_argument("--max-length",   type=int,   default=512)
     p.add_argument("--n-train",      type=int,   default=5000)
     p.add_argument("--n-eval",       type=int,   default=500)
-    p.add_argument("--muon-lr",      type=float, default=0.02)
-    p.add_argument("--adamw-lr",     type=float, default=3e-4)
+    p.add_argument("--muon-lr",      type=float, default=1e-4,
+                   help="Peak LR for Muon (matrix params)")
+    p.add_argument("--adamw-lr",     type=float, default=1e-5,
+                   help="Peak LR for AdamW (all params, or scalar params in Muon mode)")
     p.add_argument("--momentum",     type=float, default=0.95)
     p.add_argument("--weight-decay", type=float, default=0.01)
-    p.add_argument("--eval-every",   type=int,   default=100)
-    p.add_argument("--log-every",    type=int,   default=50)
+    p.add_argument("--eval-every",   type=int,   default=50)
+    p.add_argument("--log-every",    type=int,   default=25)
     p.add_argument("--log-csv",      default=None)
     p.add_argument("--cache-dir",    default="/scratch/hf_cache")
     p.add_argument("--seed",         type=int,   default=0)
